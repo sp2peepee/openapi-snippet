@@ -452,6 +452,17 @@ const getHeadersArray = function (openApi, path, method) {
         param = resolveRef(openApi, param['$ref']);
       }
 
+      // 2021-04-14 - Additional logic whenever the parameter's "schema" value is a reference
+      if (typeof param.schema !== 'undefined') {
+        if (typeof param.schema['$ref'] === 'string' &&
+          /^#/.test(param.schema['$ref'])) {
+          param.schema = resolveRef(openApi, param.schema['$ref'])
+          if (typeof param.schema.type === 'undefined') { // many schemas don't have an explicit type
+            param.schema.type = 'object';
+          }
+        }
+      }
+
       if (typeof param.in !== 'undefined' && param.in.toLowerCase() === 'header') {
         headers.push({
           name: param.name,
@@ -471,6 +482,17 @@ const getHeadersArray = function (openApi, path, method) {
       if (typeof param['$ref'] === 'string' &&
         /^#/.test(param['$ref'])) {
         param = resolveRef(openApi, param['$ref']);
+      }
+
+      // 2021-04-14 - Additional logic whenever the parameter's "schema" value is a reference
+      if (typeof param.schema !== 'undefined') {
+        if (typeof param.schema['$ref'] === 'string' &&
+          /^#/.test(param.schema['$ref'])) {
+          param.schema = resolveRef(openApi, param.schema['$ref'])
+          if (typeof param.schema.type === 'undefined') { // many schemas don't have an explicit type
+            param.schema.type = 'object';
+          }
+        }
       }
 
       if (typeof param.in !== 'undefined' && param.in.toLowerCase() === 'header') {

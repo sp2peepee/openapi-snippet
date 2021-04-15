@@ -38,7 +38,7 @@ const getEndpointSnippets = function (openApi, path, method, targets, values) {
     if (!target) throw new Error('Invalid target: ' + targets[j])
     snippets.push({
       id: targets[j],
-      title: target.title,
+      title: targets[j] == 'shell_curl' ? 'Curl' : target.title,
       content: snippet.convert(target.language, typeof target.library !== 'undefined' ? target.library : null)
     })
   }

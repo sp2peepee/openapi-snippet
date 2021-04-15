@@ -19,6 +19,7 @@
  * }
  */
 const OpenAPISampler = require('openapi-sampler')
+const _ = require('lodash');
 
 /**
  * Create HAR Request object for path and method pair described in given OpenAPI
@@ -67,14 +68,35 @@ const createHar = function (openApi, path, method, queryParamValues) {
  * @return {object}
  */
 const getPayload = function (openApi, path, method) {
-  if (typeof openApi.paths[path][method].parameters !== 'undefined') {
-    for (let i in openApi.paths[path][method].parameters) {
-      const param = openApi.paths[path][method].parameters[i]
+  let payload = null;
+  let pathParams = null;
+
+  // If path-level parameters are available
+  if (typeof openApi.paths[path].parameters !== 'undefined') {
+    for (let i in openApi.paths[path].parameters) {
+      // const param = openApi.paths[path].parameters[i]
+
+      let param = openApi.paths[path].parameters[i]
+      if (typeof param['$ref'] === 'string' &&
+        /^#/.test(param['$ref'])) {
+        param = resolveRef(openApi, param['$ref'])
+      }
+      if (typeof param.schema !== 'undefined') {
+        if (typeof param.schema['$ref'] === 'string' &&
+          /^#/.test(param.schema['$ref'])) {
+          param.schema = resolveRef(openApi, param.schema['$ref'])
+          if (typeof param.schema.type === 'undefined') { // many schemas don't have an explicit type
+            param.schema.type = 'object';
+          }
+        }
+      }
+
       if (typeof param.in !== 'undefined' && param.in.toLowerCase() === 'body' &&
         typeof param.schema !== 'undefined') {
           try {
             const sample = OpenAPISampler.sample(param.schema, {skipReadOnly: true}, openApi)
-            return {
+
+            payload = {
               mimeType: 'application/json',
               text: JSON.stringify(sample)
             }
@@ -83,6 +105,77 @@ const getPayload = function (openApi, path, method) {
             return null
           }
       }
+
+      if (typeof param.in !== 'undefined' && param.in.toLowerCase() === 'formdata') {
+        const sample = {
+          name: param.name,
+          value: 'SOME_' + (param.type).toUpperCase() + '_VALUE'
+        }
+
+        if (!payload || !payload.params) {
+          payload = {
+            mimeType: 'multipart/form-data',
+            text: '',
+            params: [ sample ]
+          }
+        } else if (payload.params && payload.params.length > 0) {
+          payload.params.push(sample)
+        }
+      }
+    }
+  }
+
+  // If method-level parameters are available
+  if (typeof openApi.paths[path][method].parameters !== 'undefined') {
+    for (let i in openApi.paths[path][method].parameters) {
+      // const param = openApi.paths[path][method].parameters[i]
+
+      let param = openApi.paths[path][method].parameters[i]
+      if (typeof param['$ref'] === 'string' &&
+        /^#/.test(param['$ref'])) {
+        param = resolveRef(openApi, param['$ref'])
+      }
+      if (typeof param.schema !== 'undefined') {
+        if (typeof param.schema['$ref'] === 'string' &&
+          /^#/.test(param.schema['$ref'])) {
+          param.schema = resolveRef(openApi, param.schema['$ref'])
+          if (typeof param.schema.type === 'undefined') { // many schemas don't have an explicit type
+            param.schema.type = 'object';
+          }
+        }
+      }
+
+      if (typeof param.in !== 'undefined' && param.in.toLowerCase() === 'body' &&
+        typeof param.schema !== 'undefined') {
+          try {
+            const sample = OpenAPISampler.sample(param.schema, {skipReadOnly: true}, openApi)
+
+            payload = {
+              mimeType: 'application/json',
+              text: JSON.stringify(sample)
+            }
+          } catch (err) {
+            console.log(err)
+            return null
+          }
+      }
+
+      if (typeof param.in !== 'undefined' && param.in.toLowerCase() === 'formdata') {
+        const sample = {
+          name: param.name,
+          value: 'SOME_' + (param.type).toUpperCase() + '_VALUE'
+        }
+
+        if (!payload || !payload.params) {
+          payload = {
+            mimeType: 'multipart/form-data',
+            text: '',
+            params: [ sample ]
+          }
+        } else if (payload.params && payload.params.length > 0) {
+          payload.params.push(sample)
+        }
+      }
     }
   }
   
@@ -90,16 +183,40 @@ const getPayload = function (openApi, path, method) {
     openApi.paths[path][method].requestBody = resolveRef(openApi, openApi.paths[path][method].requestBody['$ref']);
   }
 
-    if (openApi.paths[path][method].requestBody && openApi.paths[path][method].requestBody.content &&
-        openApi.paths[path][method].requestBody.content['application/json'] &&
-        openApi.paths[path][method].requestBody.content['application/json'].schema) {
-        const sample = OpenAPISampler.sample(openApi.paths[path][method].requestBody.content['application/json'].schema, {skipReadOnly: true}, openApi)
-        return {
-            mimeType: 'application/json',
-            text: JSON.stringify(sample)
+  // OAS 3.0 handling of request payload body
+  if (openApi.paths[path][method].requestBody && openApi.paths[path][method].requestBody.content) {
+    for (let i in openApi.paths[path][method].requestBody.content) {
+      let requestBody = openApi.paths[path][method].requestBody.content[i]
+
+      if (requestBody.schema && i == 'multipart/form-data') {
+        const sample = OpenAPISampler.sample(requestBody.schema, {skipReadOnly: true}, openApi)
+
+        for (let formData in sample) {
+          const formDataItem = {
+            name: formData,
+            value: 'SOME_' + (sample[formData]).toUpperCase() + '_VALUE'
+          }
+
+          if (!payload || !payload.params) {
+            payload = {
+              mimeType: 'multipart/form-data',
+              text: '',
+              params: [ formDataItem ]
+            }
+          } else if (payload.params && payload.params.length > 0) {
+            payload.params.push(formDataItem)
+          }
         }
+      } else if (requestBody.schema && (i == 'application/json' || i == '*/*')) {
+        const sample = OpenAPISampler.sample(requestBody.schema, {skipReadOnly: true}, openApi)
+        payload = {
+          mimeType: 'application/json',
+          text: JSON.stringify(sample)
+        }
+      }
     }
-  return null
+  }
+  return payload
 }
 
 /**
@@ -118,7 +235,7 @@ const getBaseUrl = function (openApi) {
     baseUrl += 'http'
   }
 
-  if (openApi.basePath === '/') {
+  if (openApi.basePath === '/' || !openApi.basePath) {
     baseUrl += '://' + openApi.host
   } else {
     baseUrl += '://' + openApi.host + openApi.basePath
@@ -143,8 +260,46 @@ const getQueryStrings = function (openApi, path, method, values) {
     values = {}
   }
 
+  let definedQueryStrings = [];
   const queryStrings = []
 
+  // If path-level parameters are available
+  if (typeof openApi.paths[path].parameters !== 'undefined') {
+    for (let i in openApi.paths[path].parameters) {
+      let param = openApi.paths[path].parameters[i]
+      if (typeof param['$ref'] === 'string' &&
+        /^#/.test(param['$ref'])) {
+        param = resolveRef(openApi, param['$ref'])
+      }
+      if (typeof param.schema !== 'undefined') {
+        if (typeof param.schema['$ref'] === 'string' &&
+          /^#/.test(param.schema['$ref'])) {
+          param.schema = resolveRef(openApi, param.schema['$ref'])
+          if (typeof param.schema.type === 'undefined') { // many schemas don't have an explicit type
+            param.schema.type = 'object';
+          }
+        }
+      }
+      if (typeof param.in !== 'undefined' && param.in.toLowerCase() === 'query') {
+        let value = 'SOME_' + (param.type || param.schema.type).toUpperCase() + '_VALUE'
+        if (typeof values[param.name] !== 'undefined') {
+          value = values[param.name] + ''  /* adding a empty string to convert to string */
+        } else if (typeof param.default !== 'undefined') {
+          value = param.default + ''
+        } else if (typeof param.schema !== 'undefined' && typeof param.schema.example !== 'undefined') {
+          value = param.schema.example + ''
+        }
+        queryStrings.push({
+          name: param.name,
+          value: value
+        })
+
+        definedQueryStrings.push(param.name.toLowerCase());
+      }
+    }
+  }
+
+  // If method-level parameters are available
   if (typeof openApi.paths[path][method].parameters !== 'undefined') {
     for (let i in openApi.paths[path][method].parameters) {
       let param = openApi.paths[path][method].parameters[i]
@@ -170,6 +325,14 @@ const getQueryStrings = function (openApi, path, method, values) {
         } else if (typeof param.schema !== 'undefined' && typeof param.schema.example !== 'undefined') {
           value = param.schema.example + ''
         }
+
+        // Check if query string is already defined. If yes, remove to override with method-level query string.
+        if (definedQueryStrings.indexOf(param.name.toLowerCase()) > -1) {
+          _.remove(queryStrings, function(qry) { return qry.name.toLowerCase() === param.name.toLowerCase() });
+        } else {
+          definedQueryStrings.push(param.name.toLowerCase());
+        }
+
         queryStrings.push({
           name: param.name,
           value: value
@@ -232,6 +395,16 @@ const getHeadersArray = function (openApi, path, method) {
         value: type
       })
     }
+  } else if (typeof openApi.consumes !== 'undefined') {
+    // If path specific "consumes" property is not available
+    // Use global "consumes"
+    for (let i in openApi.consumes) {
+      const type = openApi.consumes[i]
+      headers.push({
+        name: 'accept',
+        value: type
+      })
+    }
   }
 
   // 'content-type' header:
@@ -241,6 +414,16 @@ const getHeadersArray = function (openApi, path, method) {
       headers.push({
         name: 'content-type',
         value: type2
+      })
+    }
+  } else if (typeof openApi.produces !== 'undefined') {
+    // If path specific "produces" property is not available
+    // Use global "produces"
+    for (let i in openApi.produces) {
+      const type = openApi.produces[i]
+      headers.push({
+        name: 'content-type',
+        value: type
       })
     }
   }
@@ -255,11 +438,49 @@ const getHeadersArray = function (openApi, path, method) {
       }
   }
 
-  // headers defined in path object:
+  let definedHeaders = [];
+
+  // If path-level parameters are available
+  if (typeof openApi.paths[path].parameters !== 'undefined') {
+    let pathLevelObj = openApi.paths[path];
+
+    for (let k in pathLevelObj.parameters) {
+      let param = pathLevelObj.parameters[k]
+
+      if (typeof param['$ref'] === 'string' &&
+        /^#/.test(param['$ref'])) {
+        param = resolveRef(openApi, param['$ref']);
+      }
+
+      if (typeof param.in !== 'undefined' && param.in.toLowerCase() === 'header') {
+        headers.push({
+          name: param.name,
+          value: 'SOME_' + (param.type||param.schema.type).toUpperCase() + '_VALUE'
+        })
+
+        definedHeaders.push(param.name.toLowerCase());
+      }
+    }
+  }
+
+  // If headers are defined in method-level object:
   if (typeof pathObj.parameters !== 'undefined') {
     for (let k in pathObj.parameters) {
-      const param = pathObj.parameters[k]
+      let param = pathObj.parameters[k]
+
+      if (typeof param['$ref'] === 'string' &&
+        /^#/.test(param['$ref'])) {
+        param = resolveRef(openApi, param['$ref']);
+      }
+
       if (typeof param.in !== 'undefined' && param.in.toLowerCase() === 'header') {
+        if (definedHeaders.indexOf(param.name.toLowerCase()) > -1) {
+          // Check if header param is already defined. If yes, remove to override with method-level param.
+          _.remove(headers, function(header) { return header.name.toLowerCase() === param.name.toLowerCase() });
+        } else {
+          definedHeaders.push(param.name.toLowerCase());
+        }
+
         headers.push({
           name: param.name,
           value: 'SOME_' + (param.type||param.schema.type).toUpperCase() + '_VALUE'
@@ -275,6 +496,7 @@ const getHeadersArray = function (openApi, path, method) {
   if (typeof pathObj.security !== 'undefined') {
     for (var l in pathObj.security) {
       const secScheme = Object.keys(pathObj.security[l])[0]
+      // securityDefinitions is for Swagger 2.0 while securitySchemes is for OAS 3
       const secDefinition = openApi.securityDefinitions ?
         openApi.securityDefinitions[secScheme] :
         openApi.components.securitySchemes[secScheme];
@@ -313,7 +535,10 @@ const getHeadersArray = function (openApi, path, method) {
     // Need to check OAS 3.0 spec about type http and scheme
     for (let m in openApi.security) {
       const secScheme = Object.keys(openApi.security[m])[0]
-      const secDefinition = openApi.components.securitySchemes[secScheme];
+      // Check for securityDefinitions first for Swagger 2.0
+      const secDefinition = openApi.securityDefinitions ?
+        openApi.securityDefinitions[secScheme] :
+        openApi.components.securitySchemes[secScheme];
       const authType = secDefinition.type.toLowerCase();
       let authScheme = null;
       
@@ -347,17 +572,17 @@ const getHeadersArray = function (openApi, path, method) {
     }
   }
 
-  if (basicAuthDef) {
+  if (basicAuthDef && definedHeaders.indexOf('authorization') < 0) {
     headers.push({
       name: 'Authorization',
       value: 'Basic ' + 'REPLACE_BASIC_AUTH'
     })
-  } else if (apiKeyAuthDef) {
+  } else if (apiKeyAuthDef && definedHeaders.indexOf(apiKeyAuthDef.name.toLowerCase()) < 0) {
     headers.push({
       name: apiKeyAuthDef.name,
       value: 'REPLACE_KEY_VALUE'
     })
-  } else if (oauthDef) {
+  } else if (oauthDef && definedHeaders.indexOf('authorization') < 0) {
     headers.push({
       name: 'Authorization',
       value: 'Bearer ' + 'REPLACE_BEARER_TOKEN'
